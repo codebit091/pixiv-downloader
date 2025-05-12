@@ -1,0 +1,6 @@
+downloads/
+.pixiv/
+.mypy_cache/
+.vscode/
+refresh_token.txt
+__pycache__/
