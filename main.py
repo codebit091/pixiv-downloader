@@ -1,9 +1,11 @@
 from pixivpy3 import AppPixivAPI
 from pathlib import Path
-import os, glob
+from tqdm import tqdm
+import re
 import json
 import time
-from tqdm import tqdm
+import cv2
+import numpy as np
 
 from auth import login, refresh
 
@@ -67,7 +69,7 @@ def get_json(refresh_token, user_id):
     api = AppPixivAPI()
     api.auth(refresh_token=refresh_token)
     json_result = api.user_detail(user_id)
-    print("データ取得中...")
+    print("リスト取得中...")
     return api, json_result
 
 
@@ -113,7 +115,6 @@ def make_download_list(api, json_result, user_id):
                 ugoira_url = illust.meta_single_page.original_image_url.rsplit("0", 1)
                 ugoira = api.ugoira_metadata(illust_pages["id"])
                 ugoira_frames = len(ugoira.ugoira_metadata.frames)
-                # ugoita_delay = ugoira.ugoira_metadata.frames[0].delay
                 for frame in range(ugoira_frames):
                     illust_pages["ugoira_urls"].append(
                         ugoira_url[0] + str(frame) + ugoira_url[1]
@@ -127,16 +128,35 @@ def make_download_list(api, json_result, user_id):
 def make_dir(download_list):
     artist_name = rename_for_windows(download_list["name"])
     artist_id = download_list["id"]
-    artist_dir = f"download/{artist_name} - {artist_id}"
+    artist_dir = f"downloads/{artist_name} - {artist_id}"
     Path(f"{artist_dir}").mkdir(exist_ok=True, parents=True)
     with open(f"{artist_dir}/download_data.json", "w", encoding="utf-8") as f:
         json.dump(download_list, f, ensure_ascii=False, indent=4)
     return artist_dir
 
 
-def ugoira_to_mp4(api, ugoira_dir):
-    frames = glob.glob(f"{ugoira_dir}/*_ugoira*")
-    frames.sort()
+# mp4変換
+def convert_ugoira_to_mp4(api, ugoira_dir, mp4_path, illust_id):
+    frames = list(Path(ugoira_dir).iterdir())
+    frames.sort(key=lambda s: int(re.findall(r"\d+", str(s))[-1]))
+
+    ugoira_delay = api.ugoira_metadata(illust_id).ugoira_metadata.frames[0].delay
+    fps = 1000 / ugoira_delay
+    ugoira = api.illust_detail(illust_id)
+    width = ugoira.illust.width
+    height = ugoira.illust.height
+
+    fourcc = cv2.VideoWriter_fourcc("m", "p", "4", "v")
+    video = cv2.VideoWriter(mp4_path, fourcc, fps, (width, height))
+
+    for frame in tqdm(frames, leave=False, desc="convertMP4"):
+        buf = np.fromfile(frame, np.uint8)
+        img = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+        if img.shape[2] == 4:
+            img = np.delete(img, 3, axis=2)
+        video.write(img)
+
+    video.release()
 
 
 # ダウンローダー
@@ -163,6 +183,10 @@ def get_file(api, download_list, artist_dir):
                 if not (file_path.exists()):
                     api.download(ugoira, name=file_path)
                     time.sleep(2)
+
+            mp4_path = Path(f"{illust_dir}/{illust['id']}.mp4")
+            if not (mp4_path.exists()):
+                convert_ugoira_to_mp4(api, ugoira_dir, mp4_path, illust["id"])
 
     print("ダウンロード完了")
 
